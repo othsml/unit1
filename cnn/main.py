@@ -1,99 +1,102 @@
+# PyTorch CNN: Core Training Logic (Minimalist)
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+import torchvision
+import torchvision.transforms as transforms
+import requests 
+import io
+from PIL import Image
 
-training_data = [
-    ("I love this day", 2),
-    ("This movie was great", 2),
-    ("That is terrible news", 0),
-    ("I am so sad today", 0),
-    ("The cat sat on the mat", 1),
-    ("It is raining outside now", 1),
-    ("I feel fantastic and happy", 2),
-    ("What a horrible experience", 0),
-    ("This tastes like nothing", 1),
-    ("Amazing job, truly superb", 2),
-    ("I hate spiders", 0)
-]
+# --- 1. The Model Architecture ---
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Convolutional Layers
+        self.conv1 = nn.Conv2d(3, 6, 5) 
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 16, 5) 
+        # Fully Connected Layers (calculated input size: 16 * 5 * 5 = 400)
+        self.fc1 = nn.Linear(16 * 5 * 5, 120) 
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10) # 10 outputs for CIFAR-10 classes
 
-all_words = []
-for sentence, label in training_data:
-    all_words.extend(sentence.lower().split())
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x))) 
+        x = self.pool(F.relu(self.conv2(x))) 
+        x = torch.flatten(x, 1) 
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x) 
+        return x
 
-word_to_ix = {"<unk>": 0}
-for word in set(all_words):
-    if word not in word_to_ix:
-        word_to_ix[word] = len(word_to_ix)
+net = Net()
 
-VOCAB_SIZE = len(word_to_ix)
-NUM_CLASSES = 3
+# --- 2. Data Setup & Loading ---
+transform = transforms.Compose([
+    transforms.Resize((32, 32)),
+    transforms.ToTensor(),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+])
 
-def sentence_to_indices(sentence):
-    indices = [word_to_ix.get(word, word_to_ix["<unk>"])
-               for word in sentence.lower().split()]
-    return torch.tensor(indices, dtype=torch.long)
+# Download and load training data (requires internet)
+print("Loading CIFAR-10 data...")
+trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=4, shuffle=True)
 
-class SimpleSentimentModel(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, num_classes):
-        super(SimpleSentimentModel, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.linear = nn.Linear(embedding_dim, num_classes)
+classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
-    def forward(self, input_sentence_indices):
-        embeds = self.embedding(input_sentence_indices)
-        sentence_vector = torch.mean(embeds, dim=0)
-        sentiment_scores = self.linear(sentence_vector)
-        return sentiment_scores
+# --- 3. Training ---
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
 
-EMBEDDING_DIM = 10
-model = SimpleSentimentModel(VOCAB_SIZE, EMBEDDING_DIM, NUM_CLASSES)
-loss_function = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.01)
+print("Starting Training (20 Epochs)...")
+num_epochs = 20
 
-NUM_EPOCHS = 100
-
-print("Starting model training (This is the AI learning)...")
-
-for epoch in range(NUM_EPOCHS):
-    total_loss = 0
-    for sentence, label in training_data:
-        indices = sentence_to_indices(sentence)
-        target = torch.tensor([label], dtype=torch.long)
-        model.zero_grad()
-        sentiment_scores = model(indices)
-        loss = loss_function(sentiment_scores.unsqueeze(0), target)
+for epoch in range(num_epochs):
+    running_loss = 0.0
+    for i, data in enumerate(trainloader, 0):
+        inputs, labels = data
+        optimizer.zero_grad()
+        outputs = net(inputs)
+        loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
-        total_loss += loss.item()
+        running_loss += loss.item()
+        if i % 5000 == 4999:    
+            print(f'[E{epoch + 1}] Loss: {running_loss / 5000:.3f}')
+            running_loss = 0.0
+            
+print('Training finished.')
 
-    if (epoch + 1) % 10 == 0:
-        print(f'Epoch {epoch+1:3d}, Average Loss: {total_loss / len(training_data):.4f}')
+# --- 4. Custom Image Prediction ---
+CUSTOM_IMAGE_URL = "https://www.topgear.com/sites/default/files/images/news-article/2017/03/9d77d8a226a932a0def035bc4892eaab/koenigseggagerarsgeneva2017-1.jpg"
 
-print("Training complete! The model is ready to predict.")
-print("-" * 40)
+# Fetch, preprocess
+print("\nPredicting custom image...")
 
-def predict_sentiment(input_sentence):
-    model.eval()
-    with torch.no_grad():
-        indices = sentence_to_indices(input_sentence)
-        scores = model(indices)
-        predicted_index = torch.argmax(scores).item()
+# Added simple headers to mimic a browser and ensure a direct image file is returned
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+}
+# Removed stream=True and added headers and allow_redirects=True for robustness
+response = requests.get(CUSTOM_IMAGE_URL, headers=headers, allow_redirects=True) 
 
-    if predicted_index == 0:
-        return "NEGATIVE"
-    elif predicted_index == 1:
-        return "NEUTRAL"
-    else:
-        return "POSITIVE"
+image = Image.open(io.BytesIO(response.content)).convert('RGB')
+input_tensor = transform(image).unsqueeze(0) 
 
-if __name__ == "__main__":
-    sentiment_map = {0: "Negative", 1: "Neutral", 2: "Positive"}
-    print(f"Model Vocabulary Size: {VOCAB_SIZE} words")
-    print(f"The model is trained to recognize 3 classes: {sentiment_map}")
-    print("\n--- Try It Out! ---")
+# Run prediction
+with torch.no_grad():
+    net.eval()
+    outputs = net(input_tensor)
+    
+# Interpret results
+probabilities = F.softmax(outputs, dim=1)
+predicted_prob, predicted_index = torch.max(probabilities, 1)
+predicted_class = classes[predicted_index.item()]
 
-
-    user_input = input("Enter a sentence (or type 'quit' to exit): ")
-    prediction = predict_sentiment(user_input)
-    print(f"Sentiment Prediction: ===> {prediction} <===\n")
+print("--------------------------------------")
+print(f"Prediction: {predicted_class.upper()}")
+print(f"Confidence: {predicted_prob.item()*100:.2f}%")
